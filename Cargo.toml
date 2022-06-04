@@ -1,0 +1,7 @@
+[package]
+name = "notify-stress-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+notify = { version = "5.0.0-pre.15" }
