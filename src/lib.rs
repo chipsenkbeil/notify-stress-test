@@ -1,4 +1,4 @@
-use notify::{Error, Event, EventKind, RecommendedWatcher};
+use notify::{Error, Event, RecommendedWatcher};
 use std::{path::PathBuf, sync::mpsc};
 
 // Set to true to print out information during test
@@ -12,20 +12,21 @@ macro_rules! debug {
     };
 }
 
-pub fn make_watcher() -> (RecommendedWatcher, mpsc::Receiver<(PathBuf, EventKind)>) {
+pub fn make_watcher() -> (RecommendedWatcher, mpsc::Receiver<PathBuf>) {
     let (tx, rx) = mpsc::channel();
     let watcher = notify::recommended_watcher(move |res: Result<Event, Error>| match res {
-        Ok(ev) if matches!(ev.kind, EventKind::Modify(_)) => {
+        Ok(ev) => {
             for path in ev.paths {
-                debug!("New watch event for file: {:?}", path.file_name().unwrap());
+                debug!(
+                    "New watch event {:?} for file: {:?}",
+                    ev.kind,
+                    path.file_name().unwrap()
+                );
 
                 // NOTE: Ignore the error here as it just causes noise with a thread panic
                 //       Instead, we'll catch the problem in the test assertion
-                let _ = tx.send((path, ev.kind.clone()));
+                let _ = tx.send(path);
             }
-        }
-        Ok(ev) => {
-            debug!("Skipping {:?} {:?}", ev.kind, ev.paths);
         }
         Err(x) => debug!("Watcher encountered error: {:?}", x),
     })
@@ -71,17 +72,16 @@ mod tests {
         }
 
         // Sleep this thread to give the watcher a chance to catch up
-        std::thread::sleep(Duration::from_secs(5));
+        std::thread::sleep(Duration::from_secs(1));
 
         // Process all events to find modify events for file paths
-        while let Ok((path, kind)) = rx.try_recv() {
+        while let Ok(path) = rx.try_recv() {
             debug!("[4] New modify event for {:?}", path);
-            if let EventKind::Modify(_) = kind {
-                debug!("[5] Matched file {:?}", path.file_name().unwrap());
-                file_paths.remove(&path);
-            } else {
-                debug!("[5] NO MATCH!!!");
-            }
+            debug!("[5] Matched file {:?}", path.file_name().unwrap());
+            file_paths.remove(&path);
+
+            // Pause a little bit to give a chance for more
+            std::thread::sleep(Duration::from_millis(1));
         }
 
         // Assert that all paths had a modify event received
