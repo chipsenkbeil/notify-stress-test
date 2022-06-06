@@ -17,15 +17,13 @@ pub fn make_watcher() -> (RecommendedWatcher, mpsc::Receiver<PathBuf>) {
     let watcher = notify::recommended_watcher(move |res: Result<Event, Error>| match res {
         Ok(ev) => {
             for path in ev.paths {
-                debug!(
-                    "New watch event {:?} for file: {:?}",
-                    ev.kind,
-                    path.file_name().unwrap()
-                );
+                debug!("New watch event {:?}: {:?}", ev.kind, path);
 
                 // NOTE: Ignore the error here as it just causes noise with a thread panic
                 //       Instead, we'll catch the problem in the test assertion
-                let _ = tx.send(path);
+                if let Err(x) = tx.send(path) {
+                    debug!("[X] Channel closed: {}", x);
+                }
             }
         }
         Err(x) => debug!("Watcher encountered error: {:?}", x),
@@ -49,18 +47,26 @@ mod tests {
         let tmp_path = std::env::temp_dir();
         let mut file_paths = HashSet::new();
 
-        // Create 500 files and watch each of them
+        // Create N files within N directories and watch each directory
         for i in 1..=TOTAL_FILES {
-            let path = tmp_path.join(format!("file_{}", i));
+            // Create a directory to house the file (parent path)
+            let dir = tmp_path.join(format!("dir_{}", i));
+            std::fs::create_dir_all(&dir).expect("Failed to create directory");
+            let dir = dir
+                .canonicalize()
+                .expect("Failed to canonicalize parent path");
+
+            // Create the file whose path we actually want to watch
+            let path = dir.join("file");
             let _ = std::fs::write(&path, format!("Value {}", i))
                 .unwrap_or_else(|_| panic!("Failed to write {:?}", path));
             debug!("[1] Creating {:?}", path);
 
-            let path = path.canonicalize().expect("Failed to canonicalize path");
+            // Watch the parent path
             watcher
-                .watch(&path, notify::RecursiveMode::NonRecursive)
-                .unwrap_or_else(|_| panic!("Failed to watch {:?}", path));
-            debug!("[2] Watching {:?}", path);
+                .watch(&dir, notify::RecursiveMode::NonRecursive)
+                .unwrap_or_else(|_| panic!("Failed to watch {:?}", dir));
+            debug!("[2] Watching {:?}", dir);
 
             file_paths.insert(path);
         }
@@ -76,12 +82,9 @@ mod tests {
 
         // Process all events to find modify events for file paths
         while let Ok(path) = rx.try_recv() {
-            debug!("[4] New modify event for {:?}", path);
-            debug!("[5] Matched file {:?}", path.file_name().unwrap());
+            debug!("[4] Matched path {:?}", path);
             file_paths.remove(&path);
-
-            // Pause a little bit to give a chance for more
-            std::thread::sleep(Duration::from_millis(1));
+            std::thread::sleep(Duration::from_micros(10));
         }
 
         // Assert that all paths had a modify event received
